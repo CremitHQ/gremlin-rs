@@ -5,6 +5,7 @@ use native_tls::TlsConnector;
 use tungstenite::{
     client::{uri_mode, IntoClientRequest},
     client_tls_with_config,
+    http::{HeaderName, HeaderValue},
     protocol::WebSocketConfig,
     stream::{MaybeTlsStream, Mode, NoDelay},
     Connector, Message, WebSocket,
@@ -29,21 +30,31 @@ impl ConnectionStream {
             _ => None,
         };
 
-        let request = options
+        let mut request = options
             .websocket_url()
             .into_client_request()
             .map_err(|e| GremlinError::Generic(e.to_string()))?;
-        let uri = request.uri();
-        let mode = uri_mode(uri).map_err(|e| GremlinError::Generic(e.to_string()))?;
-        let host = request
+        if let Some(headers) = &options.headers {
+            for (name, value) in headers {
+                request.headers_mut().insert(
+                    HeaderName::from_bytes(name.as_bytes())
+                        .map_err(|e| GremlinError::Generic(e.to_string()))?,
+                    HeaderValue::from_str(value)
+                        .map_err(|e| GremlinError::Generic(e.to_string()))?,
+                );
+            }
+        }
+
+        let uri = request
             .uri()
             .host()
             .ok_or_else(|| GremlinError::Generic("No Hostname".into()))?;
-        let port = uri.port_u16().unwrap_or(match mode {
+        let mode = uri_mode(request.uri()).map_err(|e| GremlinError::Generic(e.to_string()))?;
+        let port = request.uri().port_u16().unwrap_or(match mode {
             Mode::Plain => 80,
             Mode::Tls => 443,
         });
-        let mut stream = TcpStream::connect((host, port))
+        let mut stream = TcpStream::connect((uri, port))
             .map_err(|e| GremlinError::Generic(format!("Unable to connect {e:?}")))?;
         NoDelay::set_nodelay(&mut stream, true)
             .map_err(|e| GremlinError::Generic(e.to_string()))?;
@@ -54,7 +65,7 @@ impl ConnectionStream {
             .map(WebSocketConfig::from);
 
         let (client, _response) =
-            client_tls_with_config(options.websocket_url(), stream, websocket_config, connector)
+            client_tls_with_config(request, stream, websocket_config, connector)
                 .map_err(|e| GremlinError::Generic(e.to_string()))?;
 
         Ok(ConnectionStream(client))
@@ -173,6 +184,38 @@ impl ConnectionOptionsBuilder {
         self.0.deserializer = deserializer;
         self
     }
+
+    /// Set multiple headers for the WebSocket handshake.
+    pub fn headers<T, U>(mut self, headers: impl IntoIterator<Item = (T, U)>) -> Self
+    where
+        T: Into<String>,
+        U: Into<String>,
+    {
+        self.0.headers = Some(
+            headers
+                .into_iter()
+                .map(|(k, v)| (k.into(), v.into()))
+                .collect(),
+        );
+        self
+    }
+
+    /// Add a single header for the WebSocket handshake.
+    pub fn header<T, U>(mut self, name: T, value: U) -> Self
+    where
+        T: Into<String>,
+        U: Into<String>,
+    {
+        if self.0.headers.is_none() {
+            self.0.headers = Some(Vec::new());
+        }
+        self.0
+            .headers
+            .as_mut()
+            .unwrap()
+            .push((name.into(), value.into()));
+        self
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -188,6 +231,7 @@ pub struct ConnectionOptions {
     pub(crate) serializer: GraphSON,
     pub(crate) deserializer: GraphSON,
     pub(crate) websocket_options: Option<WebSocketOptions>,
+    pub(crate) headers: Option<Vec<(String, String)>>,
 }
 
 #[derive(Clone, Debug)]
@@ -272,6 +316,7 @@ impl Default for ConnectionOptions {
             serializer: GraphSON::V3,
             deserializer: GraphSON::V3,
             websocket_options: None,
+            headers: None,
         }
     }
 }

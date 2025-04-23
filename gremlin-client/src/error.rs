@@ -34,6 +34,9 @@ pub enum GremlinError {
     #[error(transparent)]
     Serde(#[from] serde_json::Error),
 
+    #[error("Invalid header name: {0:?}")]
+    InvalidHeaderName(String),
+
     #[cfg(feature = "async_gremlin")]
     #[error(transparent)]
     WebSocketAsync(#[from] Arc<async_tungstenite::tungstenite::Error>),

@@ -4,6 +4,8 @@ use crate::connection::ConnectionOptions;
 
 use crate::message::Response;
 
+use async_tungstenite::tungstenite::client::IntoClientRequest;
+
 #[cfg(feature = "async-std-runtime")]
 mod async_std_use {
     pub use async_std::net::TcpStream;
@@ -43,6 +45,7 @@ use futures::{
 use futures::channel::mpsc::{channel, Receiver, Sender};
 use std::collections::HashMap;
 use std::sync::Arc;
+use tungstenite::http::{HeaderName, HeaderValue};
 use url;
 use uuid::Uuid;
 
@@ -135,13 +138,23 @@ impl Conn {
     {
         let opts = options.into();
         let url = url::Url::parse(&opts.websocket_url()).expect("failed to parse url");
-
+        let mut request = url.into_client_request().map_err(|e| Arc::new(e))?;
+        if let Some(headers) = &opts.headers {
+            for (name, value) in headers {
+                request.headers_mut().insert(
+                    HeaderName::from_bytes(name.as_bytes())
+                        .map_err(|e| GremlinError::InvalidHeaderName(e.to_string()))?,
+                    HeaderValue::from_str(value)
+                        .map_err(|e| GremlinError::InvalidHeaderName(e.to_string()))?,
+                );
+            }
+        }
         let websocket_config = opts.websocket_options.as_ref().map(WebSocketConfig::from);
 
         #[cfg(feature = "async-std-runtime")]
         let (client, _) = {
             connect_async_with_tls_connector_and_config(
-                url,
+                request,
                 tls::connector(&opts),
                 websocket_config,
             )
@@ -151,7 +164,7 @@ impl Conn {
         #[cfg(feature = "tokio-runtime")]
         let (client, _) = {
             connect_async_with_tls_connector_and_config(
-                url,
+                request,
                 tls::connector(&opts),
                 websocket_config,
             )
