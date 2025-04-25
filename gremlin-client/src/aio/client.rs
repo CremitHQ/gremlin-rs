@@ -1,5 +1,8 @@
 use crate::aio::pool::GremlinConnectionManager;
 use crate::aio::GResultSet;
+use crate::async_pool::config::PoolConfig;
+use crate::async_pool::connection::LiveConnection;
+use crate::async_pool::Pool;
 use crate::io::GraphSON;
 use crate::message::{
     message_with_args, message_with_args_and_uuid, message_with_args_v2, Message,
@@ -10,7 +13,6 @@ use crate::ToGValue;
 use crate::{ConnectionOptions, GremlinError, GremlinResult};
 use base64::encode;
 use futures::future::{BoxFuture, FutureExt};
-use mobc::{Connection, Pool};
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 
@@ -57,12 +59,9 @@ impl GremlinClient {
         let manager = GremlinConnectionManager::new(opts.clone());
 
         let pool = Pool::builder()
-            .get_timeout(opts.pool_get_connection_timeout)
-            .max_open(pool_size as u64)
-            .health_check_interval(opts.pool_healthcheck_interval)
-            //Makes max idle connections equal to max open, matching the behavior of the sync pool r2d2
-            .max_idle(0)
-            .build(manager);
+            .pool_config(PoolConfig::new(pool_size, 1))
+            .build(manager)
+            .await?;
 
         Ok(GremlinClient {
             pool,
@@ -75,7 +74,10 @@ impl GremlinClient {
     pub async fn create_session(&mut self, name: String) -> GremlinResult<SessionedClient> {
         let manager = GremlinConnectionManager::new(self.options.clone());
         Ok(SessionedClient {
-            pool: Pool::builder().max_open(1).build(manager),
+            pool: Pool::builder()
+                .pool_config(PoolConfig::new(1, 1))
+                .build(manager)
+                .await?,
             session: Some(name),
             alias: None,
             options: self.options.clone(),
@@ -151,7 +153,7 @@ impl GremlinClient {
 
     pub(crate) fn send_message_new<'a, T: Serialize>(
         &'a self,
-        mut conn: Connection<GremlinConnectionManager>,
+        mut conn: LiveConnection<GremlinConnectionManager>,
         msg: Message<T>,
     ) -> BoxFuture<'a, GremlinResult<GResultSet>> {
         let id = msg.id().clone();
@@ -163,7 +165,7 @@ impl GremlinClient {
             let mut binary = payload.into_bytes();
             binary.insert(0, content_type.len() as u8);
 
-            let (response, receiver) = conn.send(id, binary).await?;
+            let (response, receiver) = conn.connection.send(id, binary).await?;
 
             let (response, results) = match response.status.code {
                 200 | 206 => {
@@ -240,5 +242,9 @@ impl GremlinClient {
 
     fn build_message<T: Serialize>(&self, msg: Message<T>) -> GremlinResult<String> {
         serde_json::to_string(&msg).map_err(GremlinError::from)
+    }
+
+    pub fn set_connect_option(&self, connect_option: ConnectionOptions) {
+        self.pool.set_connect_option(connect_option);
     }
 }
