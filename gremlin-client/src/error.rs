@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::structure::GValue;
+use crate::{async_pool::error::ConnectionError, structure::GValue};
 
 use thiserror::Error;
 
@@ -48,6 +48,9 @@ pub enum GremlinError {
     ChannelSend(#[from] futures::channel::mpsc::SendError),
     #[error(transparent)]
     Uuid(#[from] uuid::Error),
+
+    #[error(transparent)]
+    ConnectionError(#[from] ConnectionError),
 }
 
 #[cfg(feature = "async_gremlin")]
