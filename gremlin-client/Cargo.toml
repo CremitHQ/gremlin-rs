@@ -63,6 +63,7 @@ url =  {version = "2.1.0", optional = true}
 futures = { version = "0.3.1", optional = true}
 pin-project-lite = { version = "0.2", optional = true}
 tokio = { version = "1", optional=true, features = ["full"] }
+crossbeam-queue = "0.3.12"
 
 
 [dependencies.uuid]

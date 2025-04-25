@@ -113,6 +113,7 @@
 #[macro_use]
 extern crate lazy_static;
 
+mod async_pool;
 mod client;
 mod connection;
 mod conversion;

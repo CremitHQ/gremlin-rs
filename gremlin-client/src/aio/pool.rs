@@ -8,15 +8,24 @@ use crate::{GValue, GraphSON};
 use async_trait::async_trait;
 use base64::encode;
 use std::collections::HashMap;
+use std::sync::RwLock;
 
 #[derive(Debug)]
 pub(crate) struct GremlinConnectionManager {
-    options: ConnectionOptions,
+    options: RwLock<ConnectionOptions>,
 }
 
 impl GremlinConnectionManager {
     pub(crate) fn new(options: ConnectionOptions) -> GremlinConnectionManager {
-        GremlinConnectionManager { options }
+        GremlinConnectionManager {
+            options: RwLock::new(options),
+        }
+    }
+}
+
+impl GremlinConnectionManager {
+    pub(crate) fn set_options(&self, options: ConnectionOptions) {
+        *self.options.write().expect("Failed to write options") = options;
     }
 }
 
@@ -26,11 +35,13 @@ impl Manager for GremlinConnectionManager {
     type Error = GremlinError;
 
     async fn connect(&self) -> Result<Self::Connection, Self::Error> {
-        Conn::connect(self.options.clone()).await
+        let options = self.options.read().expect("Failed to read options").clone();
+        Conn::connect(options).await
     }
 
     async fn check(&self, mut conn: Self::Connection) -> Result<Self::Connection, Self::Error> {
         let mut args = HashMap::new();
+        let options = self.options.read().expect("Failed to read options").clone();
 
         args.insert(
             String::from("gremlin"),
@@ -40,9 +51,9 @@ impl Manager for GremlinConnectionManager {
             String::from("language"),
             GValue::String(String::from("gremlin-groovy")),
         );
-        let args = self.options.serializer.write(&GValue::from(args))?;
+        let args = options.serializer.write(&GValue::from(args))?;
 
-        let message = match self.options.serializer {
+        let message = match options.serializer {
             GraphSON::V2 => message_with_args_v2(String::from("eval"), String::default(), args),
             GraphSON::V3 => message_with_args(String::from("eval"), String::default(), args),
         };
@@ -50,7 +61,7 @@ impl Manager for GremlinConnectionManager {
         let id = message.id().clone();
         let msg = serde_json::to_string(&message).map_err(GremlinError::from)?;
 
-        let content_type = self.options.serializer.content_type();
+        let content_type = options.serializer.content_type();
 
         let payload = String::from("") + content_type + &msg;
         let mut binary = payload.into_bytes();
@@ -61,7 +72,7 @@ impl Manager for GremlinConnectionManager {
         match response.status.code {
             200 | 206 => Ok(conn),
             204 => Ok(conn),
-            407 => match &self.options.credentials {
+            407 => match &options.credentials {
                 Some(c) => {
                     let mut args = HashMap::new();
 
@@ -70,7 +81,7 @@ impl Manager for GremlinConnectionManager {
                         GValue::String(encode(&format!("\0{}\0{}", c.username, c.password))),
                     );
 
-                    let args = self.options.serializer.write(&GValue::from(args))?;
+                    let args = options.serializer.write(&GValue::from(args))?;
                     let message = message_with_args_and_uuid(
                         String::from("authentication"),
                         String::from("traversal"),
@@ -81,7 +92,7 @@ impl Manager for GremlinConnectionManager {
                     let id = message.id().clone();
                     let msg = serde_json::to_string(&message).map_err(GremlinError::from)?;
 
-                    let content_type = self.options.serializer.content_type();
+                    let content_type = options.serializer.content_type();
                     let payload = String::from("") + content_type + &msg;
 
                     let mut binary = payload.into_bytes();
