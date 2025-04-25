@@ -17,7 +17,7 @@ pub trait Manager: 'static + Send + Sync {
 
     fn check(
         &self,
-        conn: &Self::Connection,
+        conn: Self::Connection,
     ) -> impl Future<Output = Result<Self::Connection, Self::Error>> + Send;
 
     fn set_connect_option(&self, options: Self::ConnectOption);

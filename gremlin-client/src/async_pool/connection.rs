@@ -18,10 +18,14 @@ pub struct LiveConnection<M: Manager> {
 }
 
 impl<M: Manager> LiveConnection<M> {
-    pub fn new(connection: M::Connection, guard: ConnectionPoolGuard<M>) -> Self {
+    pub fn new(
+        connection: M::Connection,
+        guard: ConnectionPoolGuard<M>,
+        state: ConnectionState,
+    ) -> Self {
         Self {
             connection,
-            state: ConnectionState::default(),
+            state,
             guard,
         }
     }

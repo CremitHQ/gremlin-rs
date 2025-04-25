@@ -6,21 +6,30 @@ pub mod manager;
 pub mod state;
 
 use std::{
+    marker::PhantomData,
     sync::{atomic::Ordering, Arc},
     time::{Duration, Instant},
 };
 
-use config::PoolConfig;
+use config::{PoolConfig, Timeouts};
 use connection::{IdleConnection, LiveConnection};
 use crossbeam_queue::ArrayQueue;
 use error::ConnectionError;
 use guard::ConnectionPoolGuard;
 use manager::Manager;
-use state::PoolState;
+use state::{ConnectionState, PoolState};
 use tokio::sync::{Semaphore, SemaphorePermit};
 
 pub struct Pool<M: Manager> {
     inner: Arc<PoolInner<M>>,
+}
+
+impl<M: Manager> Clone for Pool<M> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
 }
 
 impl<M: Manager> Pool<M> {
@@ -36,6 +45,37 @@ impl<M: Manager> Pool<M> {
 
     pub fn set_connect_option(&self, connect_option: M::ConnectOption) {
         self.inner.manager.set_connect_option(connect_option);
+    }
+
+    pub async fn get(&self) -> Result<LiveConnection<M>, ConnectionError> {
+        self.inner.acquire().await
+    }
+
+    pub fn builder() -> PoolBuilder<M> {
+        PoolBuilder::new()
+    }
+}
+
+pub struct PoolBuilder<M: Manager> {
+    pool_config: PoolConfig,
+    _manager: PhantomData<M>,
+}
+
+impl<M: Manager> PoolBuilder<M> {
+    pub fn new() -> Self {
+        Self {
+            pool_config: PoolConfig::default(),
+            _manager: PhantomData,
+        }
+    }
+
+    pub fn pool_config(mut self, pool_config: PoolConfig) -> Self {
+        self.pool_config = pool_config;
+        self
+    }
+
+    pub async fn build(self, manager: M) -> Result<Pool<M>, ConnectionError> {
+        Pool::connect(manager, self.pool_config).await
     }
 }
 
@@ -54,8 +94,8 @@ impl<M: Manager> PoolInner<M> {
             manager,
             config: pool_config,
             state: Default::default(),
-            semaphore: Semaphore::new(pool_config.max_size),
-            idle_connections: ArrayQueue::new(pool_config.max_size),
+            semaphore: Semaphore::new(pool_config.max_size as usize),
+            idle_connections: ArrayQueue::new(pool_config.max_size as usize),
             connect_timeout: pool_config.timeouts.create,
         };
         Arc::new(inner)
@@ -104,9 +144,15 @@ impl<M: Manager> PoolInner<M> {
                 loop {
                     let acquire_permit = self.semaphore.acquire_many(1).await?;
                     let guard = match self.pop_idle(acquire_permit) {
-                        Ok(connection) => match self.manager.check(&connection.connection).await {
-                            Ok(_) => return Ok(connection),
-                            Err(_) => connection.close(),
+                        Ok(connection) => match self.manager.check(connection.connection).await {
+                            Ok(raw) => {
+                                return Ok(LiveConnection::new(
+                                    raw,
+                                    connection.guard,
+                                    connection.state,
+                                ));
+                            }
+                            Err(_) => connection.guard,
                         },
                         Err(permit) => {
                             if let Ok(guard) = self.try_increment_size(permit) {
@@ -155,7 +201,13 @@ impl<M: Manager> PoolInner<M> {
             let connection = tokio::time::timeout(duration, self.manager.connect()).await?;
 
             match connection {
-                Ok(connection) => return Ok(LiveConnection::new(connection, guard)),
+                Ok(connection) => {
+                    return Ok(LiveConnection::new(
+                        connection,
+                        guard,
+                        ConnectionState::default(),
+                    ))
+                }
                 Err(e) => {
                     if retry > 3 {
                         return Err(ConnectionError::PoolConnect(e.to_string()));
@@ -167,11 +219,11 @@ impl<M: Manager> PoolInner<M> {
         }
     }
 
-    pub fn idle_count(&self) -> usize {
+    pub fn idle_count(&self) -> u32 {
         self.state.idle_count.load(Ordering::Acquire)
     }
 
-    pub fn connection_count(&self) -> usize {
+    pub fn connection_count(&self) -> u32 {
         self.state.current_size.load(Ordering::Acquire)
     }
 

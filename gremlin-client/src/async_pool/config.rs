@@ -3,13 +3,13 @@ use std::time::Duration;
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub struct PoolConfig {
-    pub max_size: usize,
-    pub min_size: usize,
+    pub max_size: u32,
+    pub min_size: u32,
     pub timeouts: Timeouts,
 }
 
 impl PoolConfig {
-    pub fn new(max_size: usize, min_size: usize) -> Self {
+    pub fn new(max_size: u32, min_size: u32) -> Self {
         Self {
             max_size,
             min_size,

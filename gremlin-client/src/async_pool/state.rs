@@ -1,19 +1,19 @@
 use std::{
-    sync::atomic::AtomicUsize,
+    sync::atomic::AtomicU32,
     time::{Duration, Instant},
 };
 
 #[non_exhaustive]
 pub struct PoolState {
-    pub current_size: AtomicUsize,
-    pub idle_count: AtomicUsize,
+    pub current_size: AtomicU32,
+    pub idle_count: AtomicU32,
 }
 
 impl Default for PoolState {
     fn default() -> Self {
         Self {
-            current_size: AtomicUsize::new(0),
-            idle_count: AtomicUsize::new(0),
+            current_size: AtomicU32::new(0),
+            idle_count: AtomicU32::new(0),
         }
     }
 }
