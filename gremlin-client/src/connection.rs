@@ -1,6 +1,6 @@
 use std::{net::TcpStream, sync::Arc, time::Duration};
 
-use crate::{GraphSON, GremlinError, GremlinResult};
+use crate::{async_pool::config::Timeouts, GraphSON, GremlinError, GremlinResult};
 use native_tls::TlsConnector;
 use tungstenite::{
     client::{uri_mode, IntoClientRequest},
@@ -216,6 +216,24 @@ impl ConnectionOptionsBuilder {
             .push((name.into(), value.into()));
         self
     }
+
+    pub fn pool_create_timeout(mut self, pool_create_timeout: Option<Duration>) -> Self {
+        self.0.pool_acquire_timeout = pool_create_timeout;
+        self
+    }
+
+    pub fn pool_idle_timeout(mut self, pool_idle_timeout: Option<Duration>) -> Self {
+        self.0.pool_idle_timeout = pool_idle_timeout;
+        self
+    }
+
+    pub fn pool_maintenance_interval(
+        mut self,
+        pool_maintenance_interval: Option<Duration>,
+    ) -> Self {
+        self.0.pool_maintenance_interval = pool_maintenance_interval;
+        self
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -225,6 +243,10 @@ pub struct ConnectionOptions {
     pub(crate) pool_size: u32,
     pub(crate) pool_healthcheck_interval: Option<Duration>,
     pub(crate) pool_get_connection_timeout: Option<Duration>,
+    pub(crate) pool_acquire_timeout: Option<Duration>,
+    pub(crate) pool_connect_timeout: Option<Duration>,
+    pub(crate) pool_idle_timeout: Option<Duration>,
+    pub(crate) pool_maintenance_interval: Option<Duration>,
     pub(crate) credentials: Option<Credentials>,
     pub(crate) ssl: bool,
     pub(crate) tls_options: Option<TlsOptions>,
@@ -317,6 +339,10 @@ impl Default for ConnectionOptions {
             deserializer: GraphSON::V3,
             websocket_options: None,
             headers: None,
+            pool_acquire_timeout: None,
+            pool_idle_timeout: None,
+            pool_connect_timeout: None,
+            pool_maintenance_interval: None,
         }
     }
 }
@@ -329,6 +355,10 @@ impl ConnectionOptions {
     pub fn websocket_url(&self) -> String {
         let protocol = if self.ssl { "wss" } else { "ws" };
         format!("{}://{}:{}/gremlin", protocol, self.host, self.port)
+    }
+
+    pub fn into_builder(self) -> ConnectionOptionsBuilder {
+        ConnectionOptionsBuilder(self)
     }
 }
 

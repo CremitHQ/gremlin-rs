@@ -1,7 +1,6 @@
 use crate::aio::pool::GremlinConnectionManager;
 use crate::aio::GResultSet;
-use crate::async_pool::config::PoolConfig;
-use crate::async_pool::connection::LiveConnection;
+use crate::async_pool::config::{PoolConfig, Timeouts};
 use crate::async_pool::Pool;
 use crate::io::GraphSON;
 use crate::message::{
@@ -15,6 +14,8 @@ use base64::encode;
 use futures::future::{BoxFuture, FutureExt};
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
+
+use super::connection::Conn;
 
 pub type SessionedClient = GremlinClient;
 
@@ -32,9 +33,8 @@ impl SessionedClient {
                 GraphSON::V3 => message_with_args(String::from("close"), processor, args),
             };
 
-            let conn = self.pool.get().await?;
-
-            self.send_message_new(conn, message).await
+            let mut conn = self.pool.get().await?;
+            self.send_message_new(&mut conn, message).await
         } else {
             Err(GremlinError::Generic("No session to close".to_string()))
         }
@@ -59,7 +59,16 @@ impl GremlinClient {
         let manager = GremlinConnectionManager::new(opts.clone());
 
         let pool = Pool::builder()
-            .pool_config(PoolConfig::new(pool_size, 1))
+            .pool_config(
+                PoolConfig::new(pool_size, 1)
+                    .with_timeouts(
+                        Timeouts::default()
+                            .with_acquire(opts.pool_acquire_timeout)
+                            .with_connect(opts.pool_connect_timeout)
+                            .with_idle(opts.pool_idle_timeout),
+                    )
+                    .with_pool_maintenance_interval(opts.pool_maintenance_interval),
+            )
             .build(manager)
             .await?;
 
@@ -146,14 +155,14 @@ impl GremlinClient {
             GraphSON::V3 => message_with_args(String::from("eval"), processor, args),
         };
 
-        let conn = self.pool.get().await?;
+        let mut conn = self.pool.get().await?;
 
-        self.send_message_new(conn, message).await
+        self.send_message_new(&mut conn, message).await
     }
 
     pub(crate) fn send_message_new<'a, T: Serialize>(
         &'a self,
-        mut conn: LiveConnection<GremlinConnectionManager>,
+        conn: &'a mut Conn,
         msg: Message<T>,
     ) -> BoxFuture<'a, GremlinResult<GResultSet>> {
         let id = msg.id().clone();
@@ -165,7 +174,7 @@ impl GremlinClient {
             let mut binary = payload.into_bytes();
             binary.insert(0, content_type.len() as u8);
 
-            let (response, receiver) = conn.connection.send(id, binary).await?;
+            let (response, receiver) = conn.send(id, binary).await?;
 
             let (response, results) = match response.status.code {
                 200 | 206 => {
@@ -235,9 +244,9 @@ impl GremlinClient {
 
         let message = message_with_args(String::from("bytecode"), String::from("traversal"), args);
 
-        let conn = self.pool.get().await?;
+        let mut conn = self.pool.get().await?;
 
-        self.send_message_new(conn, message).await
+        self.send_message_new(&mut conn, message).await
     }
 
     fn build_message<T: Serialize>(&self, msg: Message<T>) -> GremlinResult<String> {
@@ -246,5 +255,9 @@ impl GremlinClient {
 
     pub fn set_connect_option(&self, connect_option: ConnectionOptions) {
         self.pool.set_connect_option(connect_option);
+    }
+
+    pub fn get_connect_option(&self) -> ConnectionOptions {
+        self.pool.get_connect_option()
     }
 }

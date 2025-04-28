@@ -35,7 +35,10 @@ impl<M: Manager> ConnectionPoolGuard<M> {
 impl<M: Manager> Drop for ConnectionPoolGuard<M> {
     fn drop(&mut self) {
         if !self.cancelled {
-            self.pool.state.current_size.fetch_sub(1, Ordering::AcqRel);
+            self.pool
+                .state
+                .connection_count
+                .fetch_sub(1, Ordering::AcqRel);
             self.pool.semaphore.add_permits(1);
         }
     }

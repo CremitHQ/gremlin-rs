@@ -35,19 +35,27 @@ impl Manager for GremlinConnectionManager {
         Conn::connect(opts).await
     }
 
-    /// Check if connection is still valid (should be quick)
     async fn should_recycle(
         &self,
         conn: &Self::Connection,
-        _status: &crate::async_pool::state::ConnectionState,
+        state: &crate::async_pool::state::ConnectionState,
     ) -> Result<(), Self::Error> {
-        // TODO: Add a lighter check if possible, e.g., TCP socket status?
-        // For now, assume it's valid if Conn thinks it is.
-        if conn.is_valid() {
-            Ok(())
-        } else {
-            // TODO: Consider a more specific error type
-            Err(GremlinError::Generic("Connection is not valid".into()))
+        if !conn.is_valid() {
+            return Err(GremlinError::Generic("Connection is not valid".into()));
+        }
+        let opts = self
+            .options
+            .read()
+            .expect("failed to read connection options")
+            .clone();
+
+        match opts.pool_idle_timeout.map_or(false, |idle_timeout| {
+            state.is_beyond_idle_timeout(idle_timeout)
+        }) {
+            true => Err(GremlinError::Generic(
+                "Connection is beyond idle timeout".into(),
+            )),
+            false => Ok(()),
         }
     }
 
@@ -133,5 +141,12 @@ impl Manager for GremlinConnectionManager {
             .options
             .write()
             .expect("failed to write to connection options") = options;
+    }
+
+    fn get_connect_option(&self) -> Self::ConnectOption {
+        self.options
+            .read()
+            .expect("failed to read connection options")
+            .clone()
     }
 }

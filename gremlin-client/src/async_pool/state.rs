@@ -5,14 +5,14 @@ use std::{
 
 #[non_exhaustive]
 pub struct PoolState {
-    pub current_size: AtomicU32,
+    pub connection_count: AtomicU32,
     pub idle_count: AtomicU32,
 }
 
 impl Default for PoolState {
     fn default() -> Self {
         Self {
-            current_size: AtomicU32::new(0),
+            connection_count: AtomicU32::new(0),
             idle_count: AtomicU32::new(0),
         }
     }
@@ -46,5 +46,9 @@ impl ConnectionState {
 
     pub fn set_idle(&mut self) {
         self.idle_since = Some(Instant::now());
+    }
+
+    pub fn set_live(&mut self) {
+        self.idle_since = None;
     }
 }
